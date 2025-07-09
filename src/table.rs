@@ -17,9 +17,6 @@ where
 
     /// Auxiliary columns used for permutation or lookup constraints (extension field).
     pub aux_table: RowMajorMatrix<EF>,
-
-    /// Number of steps grouped together as one logical step of the VM or program.
-    pub step_size: usize,
 }
 
 impl<F, EF> TraceTable<F, EF>
@@ -36,11 +33,7 @@ where
     ///
     /// Columns are flattened internally into row-major form for efficient indexing.
     #[must_use]
-    pub fn from_columns(
-        main_columns: &[Vec<F>],
-        aux_columns: &[Vec<EF>],
-        step_size: usize,
-    ) -> Self {
+    pub fn from_columns(main_columns: &[Vec<F>], aux_columns: &[Vec<EF>]) -> Self {
         let num_main_columns = main_columns.len();
         let num_aux_columns = aux_columns.len();
         let num_rows = main_columns.first().map_or(0, |col| col.len());
@@ -66,7 +59,6 @@ where
         Self {
             main_table,
             aux_table,
-            step_size,
         }
     }
 
@@ -116,7 +108,7 @@ where
 
         let zero_aux = EF::zero_vec(addresses.len());
 
-        Self::from_columns(&main_columns, &[zero_aux], 1)
+        Self::from_columns(&main_columns, &[zero_aux])
     }
 
     /// Builds the auxiliary column used for permutation arguments ("s" column) as in LogUp.
