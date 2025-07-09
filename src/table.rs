@@ -23,26 +23,6 @@ where
     F: Field + PrimeField,
     EF: ExtensionField<F>,
 {
-    #[must_use]
-    pub fn new(
-        main_data: Vec<F>,
-        aux_data: Vec<EF>,
-        num_main_columns: usize,
-        num_aux_columns: usize,
-        step_size: usize,
-    ) -> Self {
-        let main_table = RowMajorMatrix::new(main_data, num_main_columns);
-        let aux_table = RowMajorMatrix::new(aux_data, num_aux_columns);
-
-        Self {
-            main_table,
-            aux_table,
-            num_main_columns,
-            num_aux_columns,
-            step_size,
-        }
-    }
-
     /// Creates a new TraceTable from its colummns
     /// Step size is how many are needed to represent a state of the VM
     #[must_use]
