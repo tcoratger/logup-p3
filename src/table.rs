@@ -34,123 +34,110 @@ where
     /// Columns are flattened internally into row-major form for efficient indexing.
     #[must_use]
     pub fn from_columns(main_columns: &[Vec<F>], aux_columns: &[Vec<EF>]) -> Self {
-        let num_main_columns = main_columns.len();
-        let num_aux_columns = aux_columns.len();
-        let num_rows = main_columns.first().map_or(0, |col| col.len());
+        let num_rows = main_columns.first().map_or(0, Vec::len);
+        let num_main_cols = main_columns.len();
+        let num_aux_cols = aux_columns.len();
 
-        // Flatten main columns into row-major order
-        let mut flat_main = Vec::with_capacity(num_main_columns * num_rows);
-        for row in 0..num_rows {
-            for col in main_columns {
-                flat_main.push(col[row]);
-            }
-        }
-        let main_table = RowMajorMatrix::new(flat_main, num_main_columns);
+        let flat_main = (0..num_rows)
+            .flat_map(|i| main_columns.iter().map(move |col| col[i]))
+            .collect();
 
-        // Flatten auxiliary columns into row-major order
-        let mut flat_aux = Vec::with_capacity(num_aux_columns * num_rows);
-        for row in 0..num_rows {
-            for col in aux_columns {
-                flat_aux.push(col[row]);
-            }
-        }
-        let aux_table = RowMajorMatrix::new(flat_aux, num_aux_columns);
+        let flat_aux = (0..num_rows)
+            .flat_map(|i| aux_columns.iter().map(move |col| col[i]))
+            .collect();
 
         Self {
-            main_table,
-            aux_table,
+            main_table: RowMajorMatrix::new(flat_main, num_main_cols),
+            aux_table: RowMajorMatrix::new(flat_aux, num_aux_cols),
         }
     }
 
-    /// Constructs a LogUp read-only trace table from address and value columns.
+    /// Constructs a LogUp read-only trace table from addresses and values.
     ///
     /// This method:
-    /// - Sorts the `(address, value)` pairs,
+    /// - Sorts `(address, value)` pairs,
     /// - Computes multiplicities,
-    /// - Extends sorted columns to match the original length,
+    /// - Pads sorted columns to match original length,
     /// - Initializes auxiliary columns to zero.
-    ///
-    /// # Arguments
-    /// - `addresses`: Original addresses accessed.
-    /// - `values`: Corresponding values.
     #[must_use]
     pub fn read_only_logup_trace(addresses: &[F], values: &[F]) -> Self {
-        // Pair addresses and values
-        let mut address_value_pairs: Vec<_> = addresses.iter().zip(values.iter()).collect();
+        let mut pairs: Vec<_> = addresses.iter().zip(values).collect();
+        pairs.sort_by_key(|&(a, _)| *a);
 
-        // Sort pairs by address (as primary key)
-        address_value_pairs.sort_by_key(|&(a, _)| *a);
-
+        let mut sorted_addrs = Vec::new();
+        let mut sorted_vals = Vec::new();
         let mut multiplicities = Vec::new();
-        let mut sorted_addresses = Vec::new();
-        let mut sorted_values = Vec::new();
 
-        // Compute multiplicities by grouping equal (address, value) pairs
-        for (key, group) in &address_value_pairs.into_iter().chunk_by(|&(a, v)| (a, v)) {
-            let group_vec: Vec<_> = group.collect();
-            multiplicities.push(F::from_usize(group_vec.len()));
-            sorted_addresses.push(*key.0);
-            sorted_values.push(*key.1);
+        for (key, group) in &pairs.into_iter().chunk_by(|&(a, v)| (a, v)) {
+            let group_count = group.count();
+            sorted_addrs.push(*key.0);
+            sorted_vals.push(*key.1);
+            multiplicities.push(F::from_usize(group_count));
         }
 
-        // Extend sorted columns to match original trace length, pad multiplicities with zero
-        sorted_addresses.resize(addresses.len(), *sorted_addresses.last().unwrap());
-        sorted_values.resize(addresses.len(), *sorted_values.last().unwrap());
-        multiplicities.resize(addresses.len(), F::ZERO);
+        let pad_len = addresses.len();
+        let pad_value_addr = *sorted_addrs.last().unwrap();
+        let pad_value_val = *sorted_vals.last().unwrap();
+
+        sorted_addrs.resize(pad_len, pad_value_addr);
+        sorted_vals.resize(pad_len, pad_value_val);
+        multiplicities.resize(pad_len, F::ZERO);
 
         let main_columns = [
             addresses.to_owned(),
             values.to_owned(),
-            sorted_addresses,
-            sorted_values,
+            sorted_addrs,
+            sorted_vals,
             multiplicities,
         ];
 
-        let zero_aux = EF::zero_vec(addresses.len());
+        let zero_aux = EF::zero_vec(pad_len);
 
         Self::from_columns(&main_columns, &[zero_aux])
     }
 
-    /// Builds the auxiliary column used for permutation arguments ("s" column) as in LogUp.
+    /// Builds the auxiliary "s" column for permutation arguments (LogUp).
     ///
-    /// Uses the following update formula:
+    /// Update rule:
     ///
     /// ```text
-    ///     s₀ = m₀ / (z - (a'₀ + α v'₀)) - 1 / (z - (a₀ + α v₀))
-    ///     sᵢ = sᵢ₋₁ + mᵢ / (z - (a'ᵢ + α v'ᵢ)) - 1 / (z - (aᵢ + α vᵢ))
+    /// s₀ = m₀ / (z - (a'₀ + α v'₀)) - 1 / (z - (a₀ + α v₀))
+    /// sᵢ = sᵢ₋₁ + mᵢ / (z - (a'ᵢ + α v'ᵢ)) - 1 / (z - (aᵢ + α vᵢ))
     /// ```
-    ///
-    /// # Arguments
-    /// - `z`: Random challenge in EF.
-    /// - `alpha`: Random challenge in EF.
     pub fn build_auxiliary_column(&mut self, z: EF, alpha: EF) {
-        let num_rows = self.main_table.height();
+        let n = self.main_table.height();
         let main = &self.main_table;
-        let mut aux_column = Vec::with_capacity(num_rows);
 
-        let a = |i| unsafe { main.get_unchecked(i, 0) };
-        let v = |i| unsafe { main.get_unchecked(i, 1) };
-        let a_sorted = |i| unsafe { main.get_unchecked(i, 2) };
-        let v_sorted = |i| unsafe { main.get_unchecked(i, 3) };
-        let m = |i| unsafe { main.get_unchecked(i, 4) };
+        let mut s = Vec::with_capacity(n);
 
-        // Compute first row separately
-        let unsorted_inv_0 = (z - (alpha * v(0) + a(0))).inverse();
-        let sorted_inv_0 = (z - (alpha * v_sorted(0) + a_sorted(0))).inverse();
-        let s0 = sorted_inv_0 * m(0) - unsorted_inv_0;
-        aux_column.push(s0);
+        let extract = |i, j| unsafe { main.get_unchecked(i, j) };
+        let term = |a: F, v: F| (z - (alpha * v + a)).inverse();
 
-        // Subsequent rows
-        for i in 1..num_rows {
-            let unsorted_inv = (z - (alpha * v(i) + a(i))).inverse();
-            let sorted_inv = (z - (alpha * v_sorted(i) + a_sorted(i))).inverse();
-            let prev = aux_column[i - 1];
-            let si = prev + sorted_inv * m(i) - unsorted_inv;
-            aux_column.push(si);
+        let a0 = extract(0, 0);
+        let v0 = extract(0, 1);
+        let a_sorted0 = extract(0, 2);
+        let v_sorted0 = extract(0, 3);
+        let m0 = extract(0, 4);
+
+        let unsorted_inv0 = term(a0, v0);
+        let sorted_inv0 = term(a_sorted0, v_sorted0);
+        s.push(sorted_inv0 * m0 - unsorted_inv0);
+
+        for i in 1..n {
+            let a = extract(i, 0);
+            let v = extract(i, 1);
+            let a_sorted = extract(i, 2);
+            let v_sorted = extract(i, 3);
+            let m = extract(i, 4);
+
+            let unsorted_inv = term(a, v);
+            let sorted_inv = term(a_sorted, v_sorted);
+
+            let si = s[i - 1] + sorted_inv * m - unsorted_inv;
+            s.push(si);
         }
 
-        // Write back to aux_table
-        for (i, &val) in aux_column.iter().enumerate() {
+        for (i, &val) in s.iter().enumerate() {
             self.aux_table.values[i] = val;
         }
     }
