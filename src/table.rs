@@ -2,17 +2,23 @@ use itertools::Itertools;
 use p3_field::{ExtensionField, Field, PrimeField};
 use p3_matrix::{Matrix, dense::RowMajorMatrix};
 
-use crate::utils::columns_to_row_major_flat;
-
-/// A two-dimensional representation of an execution trace of the STARK protocol.
+/// A two-dimensional representation of an execution trace of a STARK protocol.
+///
+/// This trace consists of a main table (base field) and an auxiliary table (extension field),
+/// typically used for enforcing permutation arguments or other auxiliary constraints.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TraceTable<F, EF>
 where
     F: Field,
     EF: ExtensionField<F>,
 {
+    /// Main execution trace (base field columns).
     pub main_table: RowMajorMatrix<F>,
+
+    /// Auxiliary columns used for permutation or lookup constraints (extension field).
     pub aux_table: RowMajorMatrix<EF>,
+
+    /// Number of steps grouped together as one logical step of the VM or program.
     pub step_size: usize,
 }
 
@@ -21,8 +27,14 @@ where
     F: Field + PrimeField,
     EF: ExtensionField<F>,
 {
-    /// Creates a new TraceTable from its colummns
-    /// Step size is how many are needed to represent a state of the VM
+    /// Creates a new `TraceTable` from column vectors.
+    ///
+    /// # Arguments
+    /// - `main_columns`: Columns over the base field F.
+    /// - `aux_columns`: Columns over the extension field EF.
+    /// - `step_size`: Number of rows corresponding to one logical program step.
+    ///
+    /// Columns are flattened internally into row-major form for efficient indexing.
     #[must_use]
     pub fn from_columns(
         main_columns: &[Vec<F>],
@@ -31,13 +43,24 @@ where
     ) -> Self {
         let num_main_columns = main_columns.len();
         let num_aux_columns = aux_columns.len();
+        let num_rows = main_columns.first().map_or(0, |col| col.len());
 
         // Flatten main columns into row-major order
-        let flat_main = columns_to_row_major_flat(main_columns);
+        let mut flat_main = Vec::with_capacity(num_main_columns * num_rows);
+        for row in 0..num_rows {
+            for col in main_columns {
+                flat_main.push(col[row]);
+            }
+        }
         let main_table = RowMajorMatrix::new(flat_main, num_main_columns);
 
-        // Flatten aux columns into row-major order
-        let flat_aux = columns_to_row_major_flat(aux_columns);
+        // Flatten auxiliary columns into row-major order
+        let mut flat_aux = Vec::with_capacity(num_aux_columns * num_rows);
+        for row in 0..num_rows {
+            for col in aux_columns {
+                flat_aux.push(col[row]);
+            }
+        }
         let aux_table = RowMajorMatrix::new(flat_aux, num_aux_columns);
 
         Self {
@@ -47,16 +70,30 @@ where
         }
     }
 
+    /// Constructs a LogUp read-only trace table from address and value columns.
+    ///
+    /// This method:
+    /// - Sorts the `(address, value)` pairs,
+    /// - Computes multiplicities,
+    /// - Extends sorted columns to match the original length,
+    /// - Initializes auxiliary columns to zero.
+    ///
+    /// # Arguments
+    /// - `addresses`: Original addresses accessed.
+    /// - `values`: Corresponding values.
+    #[must_use]
     pub fn read_only_logup_trace(addresses: &[F], values: &[F]) -> Self {
-        // We order the addresses and values.
+        // Pair addresses and values
         let mut address_value_pairs: Vec<_> = addresses.iter().zip(values.iter()).collect();
+
+        // Sort pairs by address (as primary key)
         address_value_pairs.sort_by_key(|&(a, _)| *a);
 
-        // We define the main columns that will be added to the original ones
         let mut multiplicities = Vec::new();
         let mut sorted_addresses = Vec::new();
         let mut sorted_values = Vec::new();
 
+        // Compute multiplicities by grouping equal (address, value) pairs
         for (key, group) in &address_value_pairs.into_iter().chunk_by(|&(a, v)| (a, v)) {
             let group_vec: Vec<_> = group.collect();
             multiplicities.push(F::from_usize(group_vec.len()));
@@ -64,8 +101,7 @@ where
             sorted_values.push(*key.1);
         }
 
-        // We resize the sorted addresses and values with the last value of each one so they have the
-        // same number of rows as the original addresses and values. However, their multiplicity should be zero.
+        // Extend sorted columns to match original trace length, pad multiplicities with zero
         sorted_addresses.resize(addresses.len(), *sorted_addresses.last().unwrap());
         sorted_values.resize(addresses.len(), *sorted_values.last().unwrap());
         multiplicities.resize(addresses.len(), F::ZERO);
@@ -78,15 +114,25 @@ where
             multiplicities,
         ];
 
-        // We create a vector of the same length as the main columns full with zeros from field extension and place it as the auxiliary column.
-        let zero_vec = EF::zero_vec(main_columns[0].len());
-        Self::from_columns(&main_columns, &[zero_vec], 1)
+        let zero_aux = EF::zero_vec(addresses.len());
+
+        Self::from_columns(&main_columns, &[zero_aux], 1)
     }
 
-    /// Builds the auxiliary column like `build_auxiliary_trace` in Lambdaworks.
+    /// Builds the auxiliary column used for permutation arguments ("s" column) as in LogUp.
+    ///
+    /// Uses the following update formula:
+    ///
+    /// ```text
+    ///     s₀ = m₀ / (z - (a'₀ + α v'₀)) - 1 / (z - (a₀ + α v₀))
+    ///     sᵢ = sᵢ₋₁ + mᵢ / (z - (a'ᵢ + α v'ᵢ)) - 1 / (z - (aᵢ + α vᵢ))
+    /// ```
+    ///
+    /// # Arguments
+    /// - `z`: Random challenge in EF.
+    /// - `alpha`: Random challenge in EF.
     pub fn build_auxiliary_column(&mut self, z: EF, alpha: EF) {
         let num_rows = self.main_table.height();
-
         let main = &self.main_table;
         let mut aux_column = Vec::with_capacity(num_rows);
 
@@ -96,23 +142,24 @@ where
         let v_sorted = |i| unsafe { main.get_unchecked(i, 3) };
         let m = |i| unsafe { main.get_unchecked(i, 4) };
 
-        // Compute first row
-        let unsorted_term_0 = (z - (alpha * v(0) + a(0))).inverse();
-        let sorted_term_0 = (z - (alpha * v_sorted(0) + a_sorted(0))).inverse();
-        let s0 = sorted_term_0 * m(0) - unsorted_term_0;
+        // Compute first row separately
+        let unsorted_inv_0 = (z - (alpha * v(0) + a(0))).inverse();
+        let sorted_inv_0 = (z - (alpha * v_sorted(0) + a_sorted(0))).inverse();
+        let s0 = sorted_inv_0 * m(0) - unsorted_inv_0;
         aux_column.push(s0);
 
+        // Subsequent rows
         for i in 1..num_rows {
-            let unsorted_term = (z - (alpha * v(i) + a(i))).inverse();
-            let sorted_term = (z - (alpha * v_sorted(i) + a_sorted(i))).inverse();
+            let unsorted_inv = (z - (alpha * v(i) + a(i))).inverse();
+            let sorted_inv = (z - (alpha * v_sorted(i) + a_sorted(i))).inverse();
             let prev = aux_column[i - 1];
-            let si = prev + sorted_term * m(i) - unsorted_term;
+            let si = prev + sorted_inv * m(i) - unsorted_inv;
             aux_column.push(si);
         }
 
-        // Write computed column into aux_table
-        for (i, val) in aux_column.iter().enumerate() {
-            self.aux_table.values[i] = *val;
+        // Write back to aux_table
+        for (i, &val) in aux_column.iter().enumerate() {
+            self.aux_table.values[i] = val;
         }
     }
 }
