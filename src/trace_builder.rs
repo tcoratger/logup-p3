@@ -75,8 +75,12 @@ where
     }
 
     fn assert_zero<I: Into<Self::Expr>>(&mut self, x: I) {
-        let val = x.into();
-        assert_eq!(val, F::ZERO, "Constraint failed at row {}", self.row_index);
+        assert_eq!(
+            x.into(),
+            F::ZERO,
+            "Constraint failed at row {}",
+            self.row_index
+        );
     }
 
     fn assert_eq<I1: Into<Self::Expr>, I2: Into<Self::Expr>>(&mut self, x: I1, y: I2) {
