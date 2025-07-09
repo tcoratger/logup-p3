@@ -42,19 +42,7 @@ where
             RowMajorMatrixView::new_row(&*aux_next),
         );
 
-        let is_first_row = F::from_bool(i == 0);
-        let is_last_row = F::from_bool(i == n - 1);
-        let is_transition = F::from_bool(i < n - 1);
-
-        let mut builder = TraceTableAirBuilder {
-            main: main_pair,
-            aux: aux_pair,
-            row_index: i,
-            is_first_row,
-            is_last_row,
-            is_transition,
-            challenges: &[], // Not used for random challenges in this example
-        };
+        let mut builder = TraceTableAirBuilder::new(main_pair, aux_pair, i, n, &[]);
 
         air.eval(&mut builder);
     }

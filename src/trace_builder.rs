@@ -20,6 +20,30 @@ where
     pub challenges: &'a [EF],
 }
 
+impl<'a, F, EF> TraceTableAirBuilder<'a, F, EF>
+where
+    F: Field,
+    EF: ExtensionField<F>,
+{
+    pub fn new(
+        main: ViewPair<'a, F>,
+        aux: ViewPair<'a, EF>,
+        row_index: usize,
+        n: usize,
+        challenges: &'a [EF],
+    ) -> Self {
+        Self {
+            main,
+            aux,
+            row_index,
+            is_first_row: F::from_bool(row_index == 0),
+            is_last_row: F::from_bool(row_index == n - 1),
+            is_transition: F::from_bool(row_index < n - 1),
+            challenges,
+        }
+    }
+}
+
 impl<'a, F, EF> AirBuilder for TraceTableAirBuilder<'a, F, EF>
 where
     F: Field,
