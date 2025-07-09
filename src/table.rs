@@ -13,8 +13,6 @@ where
 {
     pub main_table: RowMajorMatrix<F>,
     pub aux_table: RowMajorMatrix<EF>,
-    pub num_main_columns: usize,
-    pub num_aux_columns: usize,
     pub step_size: usize,
 }
 
@@ -45,8 +43,6 @@ where
         Self {
             main_table,
             aux_table,
-            num_main_columns,
-            num_aux_columns,
             step_size,
         }
     }
