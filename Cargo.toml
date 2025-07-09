@@ -35,3 +35,11 @@ suboptimal_flops = "allow"
 cast_sign_loss = "allow"
 
 [dependencies]
+itertools = "0.14"
+
+p3-matrix = { git = "https://github.com/Plonky3/Plonky3.git", rev = "da80cf1" }
+p3-field = { git = "https://github.com/Plonky3/Plonky3.git", rev = "da80cf1" }
+p3-air = { git = "https://github.com/Plonky3/Plonky3.git", rev = "da80cf1" }
+
+[dev-dependencies]
+p3-baby-bear = { git = "https://github.com/Plonky3/Plonky3.git", rev = "da80cf1" }
