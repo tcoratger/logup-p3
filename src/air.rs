@@ -18,31 +18,37 @@ where
     EF: ExtensionField<F>,
     A: for<'a> Air<TraceTableAirBuilder<'a, F, EF>>,
 {
-    let n = trace.main_table.height();
+    let num_rows = trace.main_table.height();
 
     let main_view = trace.main_table.as_view();
     let aux_view = trace.aux_table.as_view();
 
-    for i in 0..n {
-        let next_i = (i + 1) % n;
+    for row_index in 0..num_rows {
+        let next_row_index = (row_index + 1) % num_rows;
 
-        // Main trace views
-        let main_local = unsafe { main_view.row_slice_unchecked(i) };
-        let main_next = unsafe { main_view.row_slice_unchecked(next_i) };
+        // Main trace views: current and next rows
+        let main_row = unsafe { main_view.row_slice_unchecked(row_index) };
+        let main_next_row = unsafe { main_view.row_slice_unchecked(next_row_index) };
         let main_pair = VerticalPair::new(
-            RowMajorMatrixView::new_row(&*main_local),
-            RowMajorMatrixView::new_row(&*main_next),
+            RowMajorMatrixView::new_row(&*main_row),
+            RowMajorMatrixView::new_row(&*main_next_row),
         );
 
-        // Auxiliary trace views
-        let aux_local = unsafe { aux_view.row_slice_unchecked(i) };
-        let aux_next = unsafe { aux_view.row_slice_unchecked(next_i) };
+        // Auxiliary trace views: current and next rows
+        let aux_row = unsafe { aux_view.row_slice_unchecked(row_index) };
+        let aux_next_row = unsafe { aux_view.row_slice_unchecked(next_row_index) };
         let aux_pair = VerticalPair::new(
-            RowMajorMatrixView::new_row(&*aux_local),
-            RowMajorMatrixView::new_row(&*aux_next),
+            RowMajorMatrixView::new_row(&*aux_row),
+            RowMajorMatrixView::new_row(&*aux_next_row),
         );
 
-        let mut builder = TraceTableAirBuilder::new(main_pair, aux_pair, i, n, &[]);
+        let mut builder = TraceTableAirBuilder::new(
+            main_pair,
+            aux_pair,
+            row_index,
+            num_rows,
+            &[], // Challenges can be passed in here if needed
+        );
 
         air.eval(&mut builder);
     }
